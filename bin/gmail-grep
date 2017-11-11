@@ -1,87 +1,108 @@
-# -*- coding: utf-8 -*-
+#!/usr/bin/env python
 
 from __future__ import print_function
+from apiclient import discovery
 
-import argparse
-import re
+import argparse, re, os, httplib2, oauth2client, base64
 
-from gmail_cli.util import (
-    b64_url_decode,
-    get_gmail_service
-)
+DEFAULT_SCOPES = 'https://www.googleapis.com/auth/gmail.readonly'
 
 
 def get_params():
+    home_dir = os.path.expanduser('~')
+    credential_dir = os.path.join(home_dir, '.credentials')
     parser = argparse.ArgumentParser()
     parser.add_argument(
         'query',
         type=str,
-        help='which messages to retrieve (default: in:inbox)'
-    )
-    parser.add_argument(
-        'regex',
-        type=str,
-        help='what to filter out (default: .*)'
+        help='gmail style query (E.g. "from:berger to:cmotriage")'
     )
     parser.add_argument(
         '--max-results',
         type=int,
-        help='max results (default: 10)',
-        default=10
-    )
-    parser.add_argument(
-        '--delete',
-        action='store_true',
-        help='delete messages which match (default: false)',
-        default=False
+        help='max num messages to fetch (default: 1)',
+        default=1
     )
     parser.add_argument(
         '--client-secret-file',
         type=str,
-        help='path to the client secret file (default: .*)',
-        default='client_secret.json'
+        help='path to the client secret file (default: ' + credential_dir + '/client_secret.json)',
+        default=credential_dir+'/client_secret.json'
     )
     parser.add_argument(
         '--application-name',
         type=str,
-        help='the app name (default: .*)',
+        help='the app name (default: gmail-grep)',
         default='gmail-grep'
     )
 
     return parser.parse_args()
 
 
+def get_credentials(appname, secret_file, scopes=DEFAULT_SCOPES):
+    """ Gets valid user credentials from storage """
+    home_dir = os.path.expanduser('~')
+    credential_dir = os.path.join(home_dir, '.credentials')
+    if not os.path.exists(credential_dir):
+        os.makedirs(credential_dir)
+    credential_path = os.path.join(credential_dir, 'gmail.json')
+
+    credentials = None
+    store = oauth2client.file.Storage(credential_path)
+    if os.path.exists(credential_path):
+        credentials = store.get()
+    if not credentials or credentials.invalid:
+        flow = oauth2client.client.flow_from_clientsecrets(secret_file, scopes)
+        flow.user_agent = appname
+        flags = oauth2client.tools.argparser.parse_args(args=['--noauth_local_webserver'])
+        credentials = oauth2client.tools.run_flow(flow, store, flags)
+        print('Storing credentials to ' + credential_path)
+
+    return credentials
+
+
+def get_gmail_service(appname, client_secret_file):
+    """ Get an authenticated gmail service instance """
+    credentials = get_credentials(appname, client_secret_file)
+    http = credentials.authorize(httplib2.Http())
+    service = discovery.build('gmail', 'v1', http=http)
+    return service
+
+
 def main():
     params = get_params()
-    service = get_gmail_service(
-        params.application_name, params.client_secret_file)
+    service = get_gmail_service(params.application_name, params.client_secret_file)
     msgsr = service.users().messages()
 
-    results = msgsr.list(
-        userId='me', q=params.query, maxResults=params.max_results).execute()
-
+    results = msgsr.list(userId='me', q=params.query, maxResults=params.max_results).execute()
     messages = results.get('messages', [])
+
     if not messages:
         print('No messages found.')
         return
 
-    regex = re.compile(params.regex, re.DOTALL)
-
     for minfo in messages:
-        msg = msgsr.get(userId='me', id=minfo['id'], format='raw').execute()
+        message = msgsr.get(userId='me', id=minfo['id'], format='full').execute()
 
-        try:
-            raw = str(msg['raw'])
-            data = b64_url_decode(raw)
-            match = regex.match(data)
-            if match:
-                # TODO: handle more than one capture group
-                print(match.group(1))
+        # Fetch the headers and do some cleanup
+        headers = message['payload']['headers']
+        date = subject = ''
+        for header in headers:
+            if header['name'] == 'Date':
+                date = re.sub(r'^.*\s(\d+ \w+ \d+ \d+:\d+).*$', r'\1', header['value'])
+            if header['name'] == 'Subject':
+                subject = header['value']
 
-                if params.delete:
-                    msgsr.trash(userId='me', id=minfo['id']).execute()
-        except:
-            pass
+        # Fetch the body of the message and decode it
+        body = ''
+        if message['payload']['body']['size'] > 0 and subject:
+            body = base64.urlsafe_b64decode(str(message['payload']['body']['data']))
+            # Remove quoted/empty lines, any headers, and concatenate the rest into a single line
+            body = ' '.join([s for s in body.splitlines() if not re.match(r'^\s*$|^\>|^(From|Date|Sent|To|Cc|Subject): ', s)])
+            # Remove headers of quoted emails if found
+            body = re.sub(r' On (\d+\/\d+\/\d+,|\w+ \d+, \d+, at) \d+:\d+.*wrote:', '', body)
+            print('\t'.join([date, subject]), end="\t")
+            print(body)
 
 
 if __name__ == '__main__':

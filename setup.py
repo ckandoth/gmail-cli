@@ -1,6 +1,5 @@
-import os
+import os, sys
 from setuptools import find_packages, setup
-import sys
 
 
 PYTHON3 = sys.version_info > (3, )
@@ -27,7 +26,7 @@ def get_version():
 setup(
     name='gmail-cli',
     version=get_version(),
-    description='Command-line utils for GMail',
+    description='Command-line grep for GMail',
     long_description=readme(),
     classifiers=[
         'Development Status :: 3 - Alpha',
@@ -38,21 +37,14 @@ setup(
         "Topic :: System :: Distributed Computing",
         "Topic :: System :: Networking",
     ],
-    keywords='GMail utils CLI grep',
-    url='https://github.com/rgs1/gmail-cli',
-    author='Raul Gutierrez Segales',
-    author_email='rgs@itevenworks.net',
+    keywords='GMail CLI grep',
+    url='https://github.com/ckandoth/gmail-cli',
+    author='Cyriac Kandoth',
+    author_email='ckandoth@gmail.com',
     license='Apache',
     packages=find_packages(),
-    test_suite='gmail_cli.tests',
     scripts=['bin/gmail-grep'],
     install_requires=['google-api-python-client'],
-    tests_require=['nose'],
-    extras_require={
-        'test': [
-            'nose'
-        ],
-    },
     include_package_data=True,
     zip_safe=False
 )
